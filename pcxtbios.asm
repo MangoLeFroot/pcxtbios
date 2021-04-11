@@ -43,9 +43,9 @@
 				;   definitions if using with an original PC.
 
 TURBO_ENABLED	= 1		; Define to enable "turbo" support
-TURBO_BOOT	= 1		; Define to boot up in turbo mode (full speed)
+;TURBO_BOOT	= 1		; Define to boot up in turbo mode (full speed)
 TURBO_HOTKEY	= 1		; Define to enable "CTRL ALT -" hotkey to toggle turbo mode
-;SLOW_FLOPPY	= 1		; Define to always run floppy drive at 4.77 MHz (turbo PCs only)
+SLOW_FLOPPY	= 1		; Define to always run floppy drive at 4.77 MHz (turbo PCs only)
 
 ;TEST_CPU	= 1		; Define to test CPU at power on
 				;   If enabled, ENHANCED_KEYB must be disabled due to memory limits
@@ -68,6 +68,8 @@ MAX_MEMORY	= 640		; Maximum conventional memory allowed in KB (with EGA/VGA)
 ENHANCED_KEYB	= 1		; Define for Int 9h enhanced (101-key) keyboard support
 				;   If enabled, TEST_CPU must be disabled due to memory limits
 
+ENABLE_EXPANSION = 1
+
 ;ROM_START	= 0C000h	; Expansion ROM search start segment, must be 2K aligned
 ;ROM_END	= 0FE00h	; Expansion ROM search end segment, must be 2K aligned
 
@@ -78,7 +80,7 @@ BOOT_DELAY	= 3		; Seconds to wait after memory test (keypress will bypass)
 
 ;RETRY_DISK	= 1		; Define to always retry disk boot, even if ROM BASIC present
 
-TITLE_BAR_FADE	= 1		; Define for fancy pants (disable to save ROM space)
+;TITLE_BAR_FADE	= 1		; Define for fancy pants (disable to save ROM space)
 
 
 ;---------------------------------------------------------------------------------------------------
@@ -247,7 +249,7 @@ warn
 ;---------------------------------------------------------------------------------------------------
 ; Pad code to create entry point at specified address (needed for 100% IBM BIOS compatibility)
 macro	entry	addr
-	pad = str_banner - $ + addr - 0E000h
+	pad = str_bios - $ + addr - 0E000h
 	if pad lt 0
 		err	'No room for ENTRY point'
 	endif
@@ -443,21 +445,7 @@ segment	code
 	org	0E000h				; 8K ROM BIOS starts at F000:E000
 
 
-ifdef	IBM_PC
-ifdef	TURBO_ENABLED
-	str_banner	db	'Turbo PC BIOS v3.1 - 10/28/2017', 0
-else
-	str_banner	db	'Super PC BIOS v3.1 - 10/28/2017', 0
-endif
-else
-ifdef	TURBO_ENABLED
-	str_banner	db	'Turbo XT BIOS v3.1 - 10/28/2017', 0
-else
-	str_banner	db	'Super XT BIOS v3.1 - 10/28/2017', 0
-endif
-endif
-str_banner_end:
-
+str_bios	db	'PCXTBIOS', 0
 str_ega_vga	db	195, ' EGA/VGA Graphics', 0
 str_parallel	db	195, ' Parallel Port at ', 0
 str_game	db	195, ' Game Port at 201h', 0
@@ -533,6 +521,13 @@ endif
 	mov	bx, ax				; Start at segment 0000h
 	mov	dx, 55AAh			;   get pattern
 	cld					; Strings auto-increment
+
+ifdef	ENABLE_EXPANSION
+@@enable_extender_card:
+	mov	dx, 0213h		; ENABLE EXPANSION BOX
+	mov	al, 01h
+	out	dx, al
+endif
 
 @@find_mem_size:
 	xor	di, di				; Location XXXX:0
@@ -831,8 +826,9 @@ cold_boot:
 	mov	[ds:472h], ax			; Show data areas not init
 	jmp	warm_boot
 
-
+ifdef	WARM_BOOT_BASIC
 str_no_basic	db	'No ROM BASIC, booting from disk...', 0
+endif
 
 
 ;-----------------------------------------------
@@ -937,11 +933,6 @@ endif
 	jmp	do_boot				; Else it's a warm boot
 
 @@config:
-	mov	si, offset str_banner
-	call	title_print
-	mov	si, offset str_banner_2
-	call	print
-
 	test	[byte es:15h], 11111111b	; Any errors so far?
 	jz	@@no_errors			;   no, skip
 
@@ -992,6 +983,12 @@ print_error:
 	call	print				; Print video adapter present
 
 	mov	bx, 0507h
+
+ifdef	ENABLE_EXPANSION
+@@check_expansion:
+	call	expansion_check ; IBM 5161 Expansion Chassis test
+endif
+
 	mov	al, [es:11h]			; Get equipment byte
 	push	ax
 	mov	cl, 6
@@ -1039,9 +1036,7 @@ print_error:
 	mov	si, offset str_last_line	;   displayed for last device
 	call	print				;   on BIOS config screen
 
-	inc	bh
-	inc	bh
-	xor	bl, bl
+	mov bx, 0h
 	mov	ax, bx				; Where to position cursor
 	call	locate				;   position cursor
 	mov	si, offset str_ram_test		; Memory size string
@@ -1092,8 +1087,8 @@ print_error:
 
 ifdef	WARM_BOOT_BASIC
 do_boot:
-endif
 	call	boot_basic			; Boot BASIC if space pressed
+endif
 
 ifndef	WARM_BOOT_BASIC
 do_boot:
@@ -1384,8 +1379,8 @@ endp	checksum
 ;--------------------------------------------------------------------------------------------------
 ; Give user option to boot ROM BASIC if present, otherwise display "No ROM BASIC" message
 ;--------------------------------------------------------------------------------------------------
+ifdef	WARM_BOOT_BASIC
 proc	boot_basic	near
-
 	xor	cx, cx
 	mov	es, cx
 	mov	ch, [es:63h]			; Get int 18h (BASIC) segment in cx
@@ -1418,6 +1413,7 @@ proc	boot_basic	near
 	int	18h				; Boot ROM BASIC
 
 endp	boot_basic
+endif
 
 
 ;---------------------------------------------------------------------------------------------------
@@ -2429,9 +2425,11 @@ proc	stuff_keyboard_buffer	near
 endp	stuff_keyboard_buffer
 
 
-str_banner_2	db	CR, LF, 'Upgrades by Ya`akov Miles & Jon Petrosky', 0
 str_8088	db	'8088 CPU (', 0
+
+ifdef	WARM_BOOT_BASIC
 str_boot_basic	db	'Press SPACE to boot ROM BASIC...', 0
+endif
 
 
 ;---------------------------------------------------------------------------------------------------
@@ -4653,6 +4651,82 @@ endif
 
 endp	mem_test
 
+;----------------------------------------------------------------
+; EXPANSION I/O BOX TEST					:
+;	CHECK TO SEE IF EXPANSION BOX PRESENT - IF INSTALLED,	:
+;	TEST DATA AND ADDRESS BUSES TO I/O BOX			:
+;  ERROR='1801'                                                 :
+;----------------------------------------------------------------
+ifdef	ENABLE_EXPANSION
+proc	expansion_check	near
+	push bx
+
+;----- DETERMINE IF BOX IS PRESENT (CARD WAS ENABLED EARLIER)
+	mov	dx, 0210h		; CONTROL PORT ADDRESS
+	mov	ax, 5555h		; SET DATA PATTERN
+	out	dx, al
+	mov	al, 01h
+	in	al, dx			; RECOVER DATA
+	cmp	al, ah			; REPLY?
+	jmp @@notexist		; NO RESPONSE. GO TO NEXT TEST
+	not	ax				; MAKE DATA=AAAA
+	out	dx, al
+	mov	al, 01h
+	in	al, dx			; RECOVER DATA
+	cmp	al, ah
+	jmp @@end			; NO ANSWER=NEXT TEST
+
+;----- CHECK ADDRESS BUS
+	mov	bx, 0001h
+	mov	dx, 0215h		; LOAD HI. ADDR REG ADDRESS
+	mov	cx, 0016 		; GO ACROSS 16 BITS
+
+@@exp1:
+	mov	cs:[bx], al		; WRITE ADDRESS F0000+BX
+	nop
+	in	al, dx			; READ ADDR. HIGH
+	cmp	al, bh
+	jne	@@notexist 		; GO ERROR IF MISCOMPARE
+	inc	dx				; DX-216H (ADDR. LOW REG)
+	in	al, dx
+	cmp	al, bl			; COMPARE TO LOW ADDRESS
+	jne	@@notexist
+	dec	dx				; DX BACK TO 215H
+	shl	bx, 1
+	loop	@@exp1		; LOOP TILL '1' WALKS ACROSS BX
+
+;----- CHECK DATA BUS
+	mov	cx, 0008 		; DO 8 TIMES
+	mov	al, 01
+	dec	dx				; MAKE DX=214H (DATA BUS REG)
+
+@@exp2:
+	mov	ah, al			; SAVE DATA BUS VALUE
+	out	dx, al			; SEND VALUE TO REG
+	mov	al, 01h
+	in	al, dx			; RETRIVE VALUE FROM REG
+	cmp	al, ah			; = TO SAVED VALUE
+	jne short	@@notexist
+	shl	al, 1			; FORM NEW DATA PATTERN
+	loop	@@exp2		; LOOP TILL BIT WALKS ACROSS AL
+
+	; Expansion unit attached
+	pop bx
+	mov	ax, bx
+	call	locate				; Locate cursor
+	mov	si, offset str_exp_present
+	call print
+	inc bh
+	jmp @@end
+
+@@notexist:
+	pop bx
+	ret
+
+@@end:
+	ret
+endp	expansion_check
+endif
 
 ;--------------------------------------------------------------------------------------------------
 ; Slows the system clock rate while accessing the floppy drive
@@ -4768,68 +4842,6 @@ proc	clear_screen	near
 endp	clear_screen
 
 
-;--------------------------------------------------------------------------------------------------
-; Display null-terminated string (si) in color for BIOS title bar
-;--------------------------------------------------------------------------------------------------
-proc	title_print	near
-
-	xor	dx, dx				; Cursor starts in upper left corner
-	mov	cx, 1				; Character repeat count
-
-	mov	bx, 0070h			; Mono uses inverse attribute
-	cmp	[byte es:49h], 7		; Get CRT mode
-	je	@@loop				;   monochrome
-	mov	bl, 1Fh				; Color uses white on blue
-
-@@loop:
-	lodsb					; Print zero terminated string
-	or	al, al
-	jz	@@done				; Terminator in ax?
-
-	inc	dl				; New cursor position
-	call	color_out_char			; Print character in ax and advance cursor
-
-	jmp	@@loop				;   back for more
-
-@@done:
-ifndef	TITLE_BAR_FADE
-
-	mov	cl, 81 - (offset str_banner_end - offset str_banner)	; Extend color bar
-else
-	mov	cl, 9				; Repeat trailing space 9 chars
-	add	dl, cl				;   update cursor
-	call	color_out_char			;   extend bar
-	add	cl, 4
-
-	sub	bl, 61h				; Change color to white on black
-	jns	@@fade				;   jump if monochrome
-	mov	bl, 001h			;   else use black on blue
-
-@@fade:
-	mov	al, 0B2h			; 75% block
-	add	dl, cl				;   update cursor
-	call	color_out_char			;   extend bar
-
-	mov	al, 0B1h			; 50% block
-	add	dl, cl				;   update cursor
-	inc	cl
-	call	color_out_char			;   extend bar
-
-	mov	al, 0B0h			; 25% block
-endif
-
-color_out_char:
-	mov	ah, 09h 			; Write character and attribute
-	int	10h
-
-	mov	ah, 02h				; Set cursor position
-	int	10h
-
-	ret
-
-endp	title_print
-
-
 ;***************************************************************************************************
 ; Free ROM Space Here
 ;
@@ -4840,6 +4852,9 @@ endp	title_print
 ; +28 bytes with TITLE_BAR_FADE disabled
 ;***************************************************************************************************
 
+ifdef ENABLE_EXPANSION
+str_exp_present	db	195, ' Expansion Unit', 0
+endif
 
 ;---------------------------------------------------------------------------------------------------
 ; 8x8 Graphics Character Set (chars 0-127)

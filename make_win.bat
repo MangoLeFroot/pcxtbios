@@ -8,7 +8,7 @@ set bios=pcxtbios
 
 set floppy=0
 set ide=0
-set basic=1
+set basic=0
 
 if exist %bios%.obj del %bios%.obj
 if exist %bios%.lst del %bios%.lst
